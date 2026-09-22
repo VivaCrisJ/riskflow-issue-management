@@ -1,5 +1,7 @@
 # RiskFlow
 
+[![CI](https://github.com/VivaCrisJ/riskflow-issue-management/actions/workflows/ci.yml/badge.svg)](https://github.com/VivaCrisJ/riskflow-issue-management/actions/workflows/ci.yml)
+
 RiskFlow is an interactive portfolio prototype exploring how structured data,
 workflow automation and human-reviewed thematic analysis can support the
 issue-management lifecycle in financial services.
@@ -17,8 +19,8 @@ personal information.
 - Cross-business thematic analysis and explainable assisted classification
 - Deterministic synthetic dataset with automated validation
 
-The core MVP modules are implemented. Deployment and interview packaging are in
-progress.
+The core MVP modules are implemented and the repository is configured for
+Streamlit Community Cloud deployment and GitHub Actions validation.
 
 ## Assisted classification
 
@@ -40,3 +42,19 @@ streamlit run app.py
 python scripts/validate_synthetic_data.py
 pytest
 ```
+
+## Deploy on Streamlit Community Cloud
+
+No API keys or application secrets are required for this synthetic-data MVP.
+
+1. Sign in to [Streamlit Community Cloud](https://share.streamlit.io/) with the
+   GitHub account that owns this repository.
+2. Choose **Create app** and select **Deploy a public app from GitHub**.
+3. Use these settings:
+   - Repository: `VivaCrisJ/riskflow-issue-management`
+   - Branch: `main`
+   - Main file path: `app.py`
+4. Choose an available app URL and select **Deploy**.
+
+The checked-in `.streamlit/config.toml` supplies the presentation theme, while
+`requirements.txt` supplies the runtime dependencies.
