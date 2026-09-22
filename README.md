@@ -13,10 +13,10 @@ personal information.
 - Transparent priority scoring
 - Priority review queue and issue-level score explanation
 - Searchable Issue Register with composable filters, CSV export and drill-down
+- Independent Closure Review with evidence gates and a demonstration audit trail
 - Deterministic synthetic dataset with automated validation
 
-Additional approved modules are under active development: Closure Review and
-Thematic Analysis.
+The approved Thematic Analysis module is under active development.
 
 ## Run locally
 

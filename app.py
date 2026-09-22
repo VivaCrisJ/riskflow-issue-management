@@ -11,6 +11,9 @@ import streamlit as st
 
 from utils.analytics import (
     REPORTING_DATE,
+    closure_approval_blockers,
+    closure_decision_outcome,
+    closure_readiness,
     enrich_issues,
     filter_issues,
     load_issues,
@@ -491,6 +494,178 @@ def issue_register_page(data: pd.DataFrame) -> None:
     issue_detail(filtered.loc[filtered["issue_id"].eq(selected_id)].iloc[0])
 
 
+def _readiness_panel(issue: pd.Series) -> None:
+    st.markdown("### Closure readiness")
+    for item in closure_readiness(issue):
+        tone = PALETTE["teal"] if item["passed"] else PALETTE["rust"]
+        state = "Ready" if item["passed"] else "Evidence gap"
+        st.markdown(
+            '<div class="rf-card" style="padding:.72rem .85rem;margin-bottom:.48rem;">'
+            f'<div style="display:flex;justify-content:space-between;gap:1rem;align-items:center;">'
+            f'<span style="font-size:.87rem;font-weight:620;">{item["check"]}</span>'
+            f'<span style="font-size:.72rem;font-weight:700;color:{tone};">{state}</span></div>'
+            f'<div class="rf-note" style="margin-top:.22rem;">{item["detail"]}</div></div>',
+            unsafe_allow_html=True,
+        )
+
+
+def closure_review_page(data: pd.DataFrame) -> None:
+    header(
+        "Closure Review",
+        "Assess remediation evidence, challenge premature closure and record an independent decision.",
+    )
+    review_queue = data.loc[
+        data["status"].isin(["Awaiting Closure Review", "Further Evidence Required"])
+    ].sort_values(["priority_score", "days_overdue"], ascending=[False, False])
+
+    metrics = {
+        "Closure review queue": int(len(review_queue)),
+        "Awaiting first review": int(review_queue["status"].eq("Awaiting Closure Review").sum()),
+        "Further evidence required": int(review_queue["status"].eq("Further Evidence Required").sum()),
+        "High-risk reviews": int(review_queue["severity"].isin(["Critical", "High"]).sum()),
+    }
+    metric_cards(metrics)
+
+    labels = {
+        row.issue_id: f"{row.issue_id} · {row.issue_title}"
+        for row in review_queue.itertuples()
+    }
+    default_id = "ISS-024" if "ISS-024" in labels else next(iter(labels))
+    selected_id = st.selectbox(
+        "Select an issue for closure review",
+        options=list(labels),
+        index=list(labels).index(default_id),
+        format_func=labels.get,
+        key="closure_issue_selector",
+    )
+    issue = data.loc[data["issue_id"].eq(selected_id)].iloc[0]
+
+    st.markdown(
+        f'<div class="rf-card"><div class="rf-issue-title">{issue["issue_id"]} · {issue["issue_title"]}</div>'
+        f'<div class="rf-note">{issue["business_area"]} · {issue["severity"]} · {issue["status"]}</div>'
+        f'<p style="margin-top:1rem;line-height:1.58;font-size:.91rem;">{issue["issue_description"]}</p></div>',
+        unsafe_allow_html=True,
+    )
+
+    evidence_col, readiness_col = st.columns([1.08, .92], gap="medium")
+    with evidence_col:
+        st.markdown("### Evidence submitted")
+        st.markdown(
+            '<div class="rf-card">'
+            + _detail_pair("Remediation action", issue["remediation_action"])
+            + _detail_pair("Management commentary", issue["management_commentary"])
+            + _detail_pair("Closure evidence", issue["closure_evidence_summary"])
+            + _detail_pair("Validation method", issue["validation_method"])
+            + _detail_pair("Control design", issue["control_design_rating"])
+            + _detail_pair("Operating effectiveness", issue["operating_effectiveness_rating"])
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+    with readiness_col:
+        _readiness_panel(issue)
+
+    st.markdown("## Independent reviewer decision")
+    decision = st.radio(
+        "Decision",
+        ["Request Further Evidence", "Approve Closure", "Escalate Issue"],
+        horizontal=True,
+        key=f"closure_decision_{selected_id}",
+    )
+    templates = {
+        "Request Further Evidence": "Closure cannot yet be supported. The evidence demonstrates implementation of the redesigned control, but sustained operating effectiveness has not been established across a sufficient period and population.",
+        "Approve Closure": "The remediation evidence is complete and independent validation demonstrates that the redesigned control is appropriately designed and operating effectively.",
+        "Escalate Issue": "The issue should remain open and be escalated for governance review due to the level of risk, unresolved evidence gaps and potential impact.",
+    }
+    rationale = st.text_area(
+        "Reviewer rationale",
+        value=templates[decision],
+        height=125,
+        key=f"closure_rationale_{selected_id}_{decision}",
+    )
+    evidence_requests: list[str] = []
+    if decision == "Request Further Evidence":
+        evidence_requests = st.multiselect(
+            "Additional evidence required",
+            [
+                "Three months of operating evidence",
+                "Complete exception population",
+                "Independent reviewer sign-off",
+                "Post-implementation sample testing",
+                "Evidence of exception follow-up",
+            ],
+            default=["Three months of operating evidence", "Post-implementation sample testing"],
+        )
+
+    blockers = closure_approval_blockers(issue) if decision == "Approve Closure" else []
+    if blockers:
+        st.warning("Closure approval is blocked: " + "; ".join(blockers) + ".")
+
+    action_col, reset_col = st.columns([3, 1])
+    with action_col:
+        submit = st.button(
+            "Record review decision",
+            type="primary",
+            disabled=bool(blockers),
+            width="stretch",
+        )
+    with reset_col:
+        reset = st.button("Reset demonstration", width="stretch")
+
+    reviews = st.session_state.setdefault("closure_reviews", {})
+    if reset:
+        reviews.pop(selected_id, None)
+        st.rerun()
+    if submit:
+        if len(rationale.strip()) < 30:
+            st.error("Add a clear evidence-based rationale of at least 30 characters.")
+        elif decision == "Request Further Evidence" and not evidence_requests:
+            st.error("Select at least one additional evidence requirement.")
+        else:
+            outcome = closure_decision_outcome(decision)
+            reviews[selected_id] = {
+                "decision": decision,
+                "rationale": rationale.strip(),
+                "evidence_requests": evidence_requests,
+                "status": outcome["status"],
+                "evidence_status": outcome["evidence_status"],
+                "governance_action": outcome["governance_action"],
+                "review_date": "30 Sep 2026",
+                "reviewer": "Independent Controls Reviewer",
+            }
+
+    if selected_id in reviews:
+        review = reviews[selected_id]
+        st.success(f'Review recorded for this demonstration: {review["decision"]}.')
+        st.markdown("### Demonstration outcome")
+        before, after = st.columns(2, gap="medium")
+        with before:
+            st.markdown(
+                '<div class="rf-card"><div class="rf-note">Before review</div>'
+                + _detail_pair("Status", issue["status"])
+                + _detail_pair("Evidence status", issue["evidence_status"])
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+        with after:
+            st.markdown(
+                '<div class="rf-card"><div class="rf-note">After review</div>'
+                + _detail_pair("Status", review["status"])
+                + _detail_pair("Evidence status", review["evidence_status"])
+                + _detail_pair("Governance action", review["governance_action"])
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+        with st.expander("View review audit trail"):
+            st.write(f'**Reviewer:** {review["reviewer"]}')
+            st.write(f'**Review date:** {review["review_date"]}')
+            st.write(f'**Decision:** {review["decision"]}')
+            st.write(f'**Rationale:** {review["rationale"]}')
+            if review["evidence_requests"]:
+                st.write("**Additional evidence required:**")
+                for item in review["evidence_requests"]:
+                    st.write(f"- {item}")
+
+
 def placeholder_page(title: str, copy: str) -> None:
     header(title, copy)
     st.info("This module is included in the approved product design and will be implemented in the next build slice.")
@@ -517,6 +692,6 @@ elif page == "Priority Review":
 elif page == "Issue Register":
     issue_register_page(data)
 elif page == "Closure Review":
-    placeholder_page("Closure Review", "Assess remediation evidence and record an independent closure decision.")
+    closure_review_page(data)
 else:
     placeholder_page("Thematic Analysis", "Identify recurring control weaknesses and support consistent issue classification.")

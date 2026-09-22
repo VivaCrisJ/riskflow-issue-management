@@ -229,3 +229,69 @@ def filter_issues(
     if repeat_only:
         result = result.loc[result["repeat_issue"]]
     return result
+
+
+def closure_readiness(issue: pd.Series) -> list[dict[str, object]]:
+    """Assess the evidence gates required before an issue can be closed."""
+    checks = [
+        {
+            "check": "Remediation action completed",
+            "passed": issue["status"] in {"Awaiting Closure Review", "Further Evidence Required", "Closed"},
+            "detail": "The business owner has submitted the issue for independent closure review.",
+        },
+        {
+            "check": "Closure evidence submitted",
+            "passed": issue["evidence_status"] in {"Submitted", "Under Review", "Validated", "Further Evidence Required"},
+            "detail": f'Evidence status: {issue["evidence_status"]}.',
+        },
+        {
+            "check": "Control design effective",
+            "passed": issue["control_design_rating"] == "Effective",
+            "detail": f'Design assessment: {issue["control_design_rating"]}.',
+        },
+        {
+            "check": "Operating effectiveness demonstrated",
+            "passed": issue["operating_effectiveness_rating"] == "Effective",
+            "detail": f'Operating assessment: {issue["operating_effectiveness_rating"]}.',
+        },
+        {
+            "check": "Evidence independently validated",
+            "passed": issue["evidence_status"] == "Validated",
+            "detail": "Independent validation is required before closure approval.",
+        },
+        {
+            "check": "No unresolved material exceptions",
+            "passed": issue["operating_effectiveness_rating"] == "Effective" and int(issue["evidence_rejection_count"]) == 0,
+            "detail": "Open testing exceptions or returned evidence prevent closure.",
+        },
+    ]
+    return checks
+
+
+def closure_approval_blockers(issue: pd.Series) -> list[str]:
+    """Return failed closure gates that block an Approve Closure decision."""
+    return [str(item["check"]) for item in closure_readiness(issue) if not item["passed"]]
+
+
+def closure_decision_outcome(decision: str) -> dict[str, str]:
+    """Map a reviewer decision to the demonstration's resulting workflow state."""
+    outcomes = {
+        "Approve Closure": {
+            "status": "Closed",
+            "evidence_status": "Validated",
+            "governance_action": "Remove from the open-issue population and retain the closure audit trail.",
+        },
+        "Request Further Evidence": {
+            "status": "Further Evidence Required",
+            "evidence_status": "Further Evidence Required",
+            "governance_action": "Return the issue to the action owner with an evidenced follow-up requirement.",
+        },
+        "Escalate Issue": {
+            "status": "Awaiting Closure Review",
+            "evidence_status": "Under Review",
+            "governance_action": "Escalate to the relevant risk governance forum and retain the issue as open.",
+        },
+    }
+    if decision not in outcomes:
+        raise ValueError(f"Unsupported closure decision: {decision}")
+    return outcomes[decision]

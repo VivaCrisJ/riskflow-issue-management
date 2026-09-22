@@ -1,6 +1,9 @@
 from pathlib import Path
 
 from utils.analytics import (
+    closure_approval_blockers,
+    closure_decision_outcome,
+    closure_readiness,
     enrich_issues,
     filter_issues,
     load_issues,
@@ -55,3 +58,23 @@ def test_issue_register_filters_are_composable():
         escalation_only=True,
     )
     assert filtered["issue_id"].tolist() == ["ISS-018"]
+
+
+def test_closure_rules_block_premature_approval():
+    data = enrich_issues(load_issues(DATA_PATH))
+    duplicate_payment = data.loc[data["issue_id"].eq("ISS-024")].iloc[0]
+    checks = closure_readiness(duplicate_payment)
+    blockers = closure_approval_blockers(duplicate_payment)
+
+    assert len(checks) == 6
+    assert "Operating effectiveness demonstrated" in blockers
+    assert "Evidence independently validated" in blockers
+
+    closed = data.loc[data["issue_id"].eq("ISS-005")].iloc[0]
+    assert closure_approval_blockers(closed) == []
+
+
+def test_closure_decision_outcomes_are_explicit():
+    further_evidence = closure_decision_outcome("Request Further Evidence")
+    assert further_evidence["status"] == "Further Evidence Required"
+    assert further_evidence["evidence_status"] == "Further Evidence Required"
