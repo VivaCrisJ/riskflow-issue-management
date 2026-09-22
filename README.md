@@ -30,3 +30,4 @@ streamlit run app.py
 python scripts/validate_synthetic_data.py
 pytest
 ```
+
