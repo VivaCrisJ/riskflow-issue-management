@@ -4,11 +4,13 @@ from utils.analytics import (
     closure_approval_blockers,
     closure_decision_outcome,
     closure_readiness,
+    classify_issue_text,
     enrich_issues,
     filter_issues,
     load_issues,
     priority_queue,
     summary_metrics,
+    thematic_summary,
 )
 
 
@@ -78,3 +80,26 @@ def test_closure_decision_outcomes_are_explicit():
     further_evidence = closure_decision_outcome("Request Further Evidence")
     assert further_evidence["status"] == "Further Evidence Required"
     assert further_evidence["evidence_status"] == "Further Evidence Required"
+
+
+def test_thematic_summary_identifies_cross_business_patterns():
+    data = enrich_issues(load_issues(DATA_PATH))
+    themes = thematic_summary(data)
+    manual = themes.loc[
+        themes["root_cause_category"].eq("Manual Process Dependency")
+    ].iloc[0]
+
+    assert manual["issue_count"] == 11
+    assert manual["business_area_count"] >= 4
+    assert bool(manual["systemic_theme"])
+
+
+def test_rule_assisted_classification_is_explainable():
+    result = classify_issue_text(
+        "Manual reconciliation resulted in delayed detection of duplicate customer payments."
+    )
+    assert result["risk_category"] == "Operational Risk"
+    assert result["root_cause_category"] == "Manual Process Dependency"
+    assert result["risk_theme"] == "Payment Processing"
+    assert "manual" in result["matched_terms"]
+    assert result["match_strength"] == "Strong rule match"

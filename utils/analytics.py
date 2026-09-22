@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 import pandas as pd
 
@@ -19,6 +20,54 @@ DATE_COLUMNS = [
 ]
 
 SEVERITY_POINTS = {"Critical": 40, "High": 28, "Medium": 16, "Low": 6}
+
+RISK_CATEGORY_RULES = {
+    "Financial Crime": ["aml", "sanction", "screening", "transaction monitoring", "pep", "suspicious activity", "sar"],
+    "Technology & Cyber Risk": ["access", "privileged", "cyber", "vulnerability", "server", "service account", "system security"],
+    "Conduct Risk": ["vulnerable", "complaint", "forbearance", "affordability", "customer outcome", "redress"],
+    "Credit Risk": ["credit", "collateral", "valuation", "underwriting", "loan decision", "affordability assessment"],
+    "Third-Party Risk": ["supplier", "vendor", "third party", "third-party", "outsourced", "outsourcing"],
+    "Regulatory Compliance": ["regulatory", "disclosure", "compliance breach", "regulator", "return submission"],
+    "Financial Reporting Risk": ["journal", "financial reporting", "month-end", "ledger", "suspense account"],
+    "Operational Risk": ["payment", "reconciliation", "duplicate", "processing", "operational", "error", "delay", "failure"],
+}
+
+ROOT_CAUSE_RULES = {
+    "Manual Process Dependency": ["manual", "manually", "spreadsheet", "rekey", "re-key", "manual reconciliation"],
+    "Access Governance": ["access", "privileged", "permission", "leaver", "segregation", "user role"],
+    "Data Quality": ["data quality", "incomplete data", "inaccurate", "missing data", "migration", "population incomplete"],
+    "System Limitation": ["system limitation", "system could not", "no automated", "interface failure", "batch job", "alert failure"],
+    "Inadequate Monitoring": ["monitoring", "not detected", "delayed detection", "exception monitoring", "threshold", "review overdue"],
+    "Training and Capability": ["training", "guidance", "staff capability", "knowledge gap", "inconsistent application"],
+    "Third-Party Failure": ["supplier", "vendor", "third party", "third-party", "outsourced", "service provider"],
+    "Change Management": ["change", "deployment", "release", "implementation update", "configuration change"],
+    "Roles and Responsibilities": ["ownership", "owner unclear", "responsibility", "accountability", "handoff"],
+    "Inadequate Process Design": ["process design", "procedure", "workflow", "control gap", "control missing", "unclear process"],
+}
+
+RISK_THEME_RULES = {
+    "Payment Processing": ["payment", "duplicate", "standing order", "refund"],
+    "Identity and Access Management": ["access", "privileged", "permission", "leaver", "service account"],
+    "Screening Controls": ["aml", "sanction", "screening", "pep"],
+    "Customer Outcomes": ["vulnerable", "complaint", "forbearance", "affordability", "redress"],
+    "Data Quality": ["data", "migration", "population", "incomplete", "inaccurate"],
+    "Operational Resilience": ["outage", "recovery", "continuity", "backup", "supplier failure"],
+    "Reconciliations": ["reconciliation", "journal", "ledger", "suspense"],
+    "Control Governance": ["approval", "owner", "review", "evidence", "escalation"],
+}
+
+INVESTIGATION_AREAS = {
+    "Manual Process Dependency": ["automation opportunities", "exception monitoring", "maker-checker controls", "reconciliation completeness"],
+    "Access Governance": ["least-privilege design", "access approval", "periodic recertification", "joiner-mover-leaver controls"],
+    "Data Quality": ["source-data validation", "population completeness", "reconciliation to source", "exception ownership"],
+    "System Limitation": ["automated validation", "alert coverage", "interface monitoring", "manual fallback controls"],
+    "Inadequate Monitoring": ["risk-based thresholds", "management information", "exception ageing", "documented follow-up"],
+    "Training and Capability": ["role-based guidance", "quality assurance", "competency assessment", "supervisory review"],
+    "Third-Party Failure": ["supplier assurance", "service-level monitoring", "business continuity", "exit planning"],
+    "Change Management": ["control-impact assessment", "testing evidence", "approval governance", "post-implementation review"],
+    "Roles and Responsibilities": ["accountable ownership", "RACI clarity", "handoff controls", "escalation routes"],
+    "Inadequate Process Design": ["end-to-end control design", "preventive controls", "detective controls", "exception escalation"],
+}
 
 
 def load_issues(path: str | Path) -> pd.DataFrame:
@@ -295,3 +344,88 @@ def closure_decision_outcome(decision: str) -> dict[str, str]:
     if decision not in outcomes:
         raise ValueError(f"Unsupported closure decision: {decision}")
     return outcomes[decision]
+
+
+def thematic_summary(frame: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate root causes into transparent cross-business risk themes."""
+    records: list[dict[str, object]] = []
+    for root_cause, group in frame.groupby("root_cause_category"):
+        business_areas = sorted(group["business_area"].unique())
+        open_group = group.loc[group["status"].ne("Closed")]
+        records.append(
+            {
+                "root_cause_category": root_cause,
+                "issue_count": int(len(group)),
+                "open_issues": int(len(open_group)),
+                "business_area_count": int(len(business_areas)),
+                "business_areas": ", ".join(business_areas),
+                "high_critical": int(group["severity"].isin(["Critical", "High"]).sum()),
+                "overdue": int(group["overdue_flag"].sum()),
+                "repeat_issues": int(group["repeat_issue"].sum()),
+                "systemic_theme": len(group) >= 5 and len(business_areas) >= 3,
+            }
+        )
+    return pd.DataFrame(records).sort_values(
+        ["systemic_theme", "issue_count", "business_area_count"],
+        ascending=[False, False, False],
+    ).reset_index(drop=True)
+
+
+def _rule_scores(text: str, rules: dict[str, list[str]]) -> tuple[dict[str, int], dict[str, list[str]]]:
+    normalised = re.sub(r"\s+", " ", text.lower()).strip()
+    scores: dict[str, int] = {}
+    matches: dict[str, list[str]] = {}
+    for label, terms in rules.items():
+        matched = [term for term in terms if term in normalised]
+        scores[label] = len(matched)
+        matches[label] = matched
+    return scores, matches
+
+
+def _best_rule_match(
+    text: str, rules: dict[str, list[str]], fallback: str
+) -> tuple[str, int, list[str]]:
+    scores, matches = _rule_scores(text, rules)
+    label = max(scores, key=scores.get)
+    score = scores[label]
+    if score == 0:
+        return fallback, 0, []
+    return label, score, matches[label]
+
+
+def classify_issue_text(text: str) -> dict[str, object]:
+    """Return explainable, rule-assisted classification suggestions."""
+    cleaned = text.strip()
+    if not cleaned:
+        raise ValueError("Issue description is required")
+
+    risk, risk_score, risk_terms = _best_rule_match(
+        cleaned, RISK_CATEGORY_RULES, "Further assessment required"
+    )
+    root, root_score, root_terms = _best_rule_match(
+        cleaned, ROOT_CAUSE_RULES, "Further root-cause analysis required"
+    )
+    theme, theme_score, theme_terms = _best_rule_match(
+        cleaned, RISK_THEME_RULES, "General control governance"
+    )
+    total_score = risk_score + root_score + theme_score
+    if total_score >= 6:
+        match_strength = "Strong rule match"
+    elif total_score >= 3:
+        match_strength = "Moderate rule match"
+    else:
+        match_strength = "Limited rule match"
+
+    investigation = INVESTIGATION_AREAS.get(
+        root,
+        ["process walkthrough", "control design assessment", "evidence testing", "accountable owner review"],
+    )
+    return {
+        "risk_category": risk,
+        "root_cause_category": root,
+        "risk_theme": theme,
+        "match_strength": match_strength,
+        "matched_terms": sorted(set(risk_terms + root_terms + theme_terms)),
+        "suggested_investigation_areas": investigation,
+        "method": "Transparent keyword and business-rule prototype",
+    }

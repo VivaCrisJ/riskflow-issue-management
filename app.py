@@ -14,12 +14,14 @@ from utils.analytics import (
     closure_approval_blockers,
     closure_decision_outcome,
     closure_readiness,
+    classify_issue_text,
     enrich_issues,
     filter_issues,
     load_issues,
     priority_factors,
     priority_queue,
     summary_metrics,
+    thematic_summary,
 )
 
 
@@ -666,6 +668,115 @@ def closure_review_page(data: pd.DataFrame) -> None:
                     st.write(f"- {item}")
 
 
+def thematic_analysis_page(data: pd.DataFrame) -> None:
+    header(
+        "Thematic Analysis",
+        "Identify recurring control weaknesses across the organisation and support consistent issue classification.",
+    )
+    themes = thematic_summary(data)
+    systemic = themes.loc[themes["systemic_theme"]]
+    manual_dependency = themes.loc[
+        themes["root_cause_category"].eq("Manual Process Dependency")
+    ].iloc[0]
+    access_governance = themes.loc[
+        themes["root_cause_category"].eq("Access Governance")
+    ].iloc[0]
+    metrics = {
+        "Cross-business themes": int(len(systemic)),
+        "Manual-dependency issues": int(manual_dependency["issue_count"]),
+        "Access-governance issues": int(access_governance["issue_count"]),
+        "Repeat issues": int(data["repeat_issue"].sum()),
+    }
+    metric_cards(metrics)
+
+    st.markdown("## Emerging themes")
+    st.markdown(
+        '<div class="rf-section-copy">Themes are marked systemic when they appear frequently across at least three business areas.</div>',
+        unsafe_allow_html=True,
+    )
+    theme_columns = st.columns(min(3, len(systemic)), gap="small")
+    for column, (_, theme) in zip(theme_columns, systemic.head(3).iterrows()):
+        with column:
+            st.markdown(
+                '<div class="rf-card" style="min-height:190px;">'
+                f'<div class="rf-note">Systemic theme</div>'
+                f'<div class="rf-issue-title" style="margin-top:.35rem;">{theme["root_cause_category"]}</div>'
+                f'<p style="font-size:.86rem;line-height:1.5;color:{PALETTE["muted"]};">'
+                f'{int(theme["issue_count"])} issues across {int(theme["business_area_count"])} business areas. '
+                f'{int(theme["open_issues"])} remain open and {int(theme["repeat_issues"])} are repeat issues.</p>'
+                f'<div class="rf-note">{theme["business_areas"]}</div></div>',
+                unsafe_allow_html=True,
+            )
+
+    heatmap = pd.crosstab(data["root_cause_category"], data["business_area"])
+    heatmap = heatmap.loc[heatmap.sum(axis=1).sort_values(ascending=False).index]
+    fig = px.imshow(
+        heatmap,
+        labels=dict(x="Business area", y="Root cause", color="Issues"),
+        color_continuous_scale=[[0, "#F1F4F4"], [.45, "#AFC1C0"], [1, PALETTE["teal"]]],
+        aspect="auto",
+        text_auto=True,
+        title="Root causes across business areas",
+    )
+    fig.update_xaxes(side="bottom", tickangle=-28)
+    fig.update_layout(coloraxis_showscale=False)
+    st.plotly_chart(chart_layout(fig, 460), width="stretch", config={"displayModeBar": False})
+
+    display_themes = themes.copy()
+    display_themes["Systemic"] = display_themes["systemic_theme"].map({True: "Yes", False: "—"})
+    display_themes = display_themes[["root_cause_category", "issue_count", "business_area_count", "open_issues", "high_critical", "overdue", "repeat_issues", "Systemic"]]
+    display_themes.columns = ["Root cause", "Issues", "Business areas", "Open", "High / critical", "Overdue", "Repeat", "Systemic"]
+    with st.expander("View full thematic summary"):
+        st.dataframe(display_themes, hide_index=True, width="stretch")
+
+    st.markdown("## Assisted issue classification")
+    st.markdown(
+        '<div class="rf-section-copy">A transparent rule-based prototype showing how AI-assisted classification could support consistent triage. Human review remains required.</div>',
+        unsafe_allow_html=True,
+    )
+    description = st.text_area(
+        "Issue description",
+        value="Manual reconciliation resulted in delayed detection of duplicate customer payments.",
+        height=110,
+        key="classification_input",
+    )
+    analyse = st.button("Analyse issue description", type="primary", width="stretch")
+    if analyse:
+        if len(description.strip()) < 15:
+            st.error("Enter a sufficiently detailed issue description before running the analysis.")
+        else:
+            result = classify_issue_text(description)
+            st.session_state["classification_result"] = result
+
+    if "classification_result" in st.session_state:
+        result = st.session_state["classification_result"]
+        first, second, third = st.columns(3, gap="small")
+        classifications = [
+            (first, "Suggested risk category", result["risk_category"]),
+            (second, "Suggested root cause", result["root_cause_category"]),
+            (third, "Suggested risk theme", result["risk_theme"]),
+        ]
+        for column, label, value in classifications:
+            with column:
+                st.markdown(
+                    f'<div class="rf-card" style="min-height:118px;"><div class="rf-note">{label}</div>'
+                    f'<div class="rf-issue-title" style="margin-top:.55rem;">{value}</div></div>',
+                    unsafe_allow_html=True,
+                )
+        detail_left, detail_right = st.columns([1, 1], gap="medium")
+        with detail_left:
+            st.markdown("### Suggested investigation areas")
+            for item in result["suggested_investigation_areas"]:
+                st.write(f"- {item}")
+        with detail_right:
+            st.markdown("### Explainability")
+            st.write(f'**Match strength:** {result["match_strength"]}')
+            matched = ", ".join(result["matched_terms"]) or "No direct keyword matches"
+            st.write(f"**Matched terms:** {matched}")
+            st.write(f'**Method:** {result["method"]}')
+        st.info("Suggested classification only. Final assessment, challenge and accountability remain with the risk professional.")
+
+
 def placeholder_page(title: str, copy: str) -> None:
     header(title, copy)
     st.info("This module is included in the approved product design and will be implemented in the next build slice.")
@@ -694,4 +805,4 @@ elif page == "Issue Register":
 elif page == "Closure Review":
     closure_review_page(data)
 else:
-    placeholder_page("Thematic Analysis", "Identify recurring control weaknesses and support consistent issue classification.")
+    thematic_analysis_page(data)
