@@ -1,6 +1,12 @@
 from pathlib import Path
 
-from utils.analytics import enrich_issues, load_issues, priority_queue, summary_metrics
+from utils.analytics import (
+    enrich_issues,
+    filter_issues,
+    load_issues,
+    priority_queue,
+    summary_metrics,
+)
 
 
 DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "synthetic_issues.csv"
@@ -34,3 +40,18 @@ def test_closed_issues_are_not_overdue_and_queue_excludes_them():
     assert not queue["status"].eq("Closed").any()
     assert queue.iloc[0]["priority_band"] == "Immediate"
 
+
+def test_issue_register_filters_are_composable():
+    data = enrich_issues(load_issues(DATA_PATH))
+
+    search_result = filter_issues(data, search="duplicate payments")
+    assert search_result["issue_id"].tolist() == ["ISS-024"]
+
+    filtered = filter_issues(
+        data,
+        business_areas=["Technology"],
+        severities=["High"],
+        overdue_only=True,
+        escalation_only=True,
+    )
+    assert filtered["issue_id"].tolist() == ["ISS-018"]

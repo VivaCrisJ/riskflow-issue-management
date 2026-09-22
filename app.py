@@ -12,6 +12,7 @@ import streamlit as st
 from utils.analytics import (
     REPORTING_DATE,
     enrich_issues,
+    filter_issues,
     load_issues,
     priority_factors,
     priority_queue,
@@ -319,6 +320,177 @@ def priority_page(data: pd.DataFrame) -> None:
     )
 
 
+def _display_date(value: object) -> str:
+    return value.strftime("%d %b %Y") if pd.notna(value) else "Not recorded"
+
+
+def _detail_pair(label: str, value: object) -> str:
+    display_value = "Not recorded" if value is None or pd.isna(value) or str(value).strip() == "" else str(value)
+    return (
+        '<div style="padding:.68rem 0;border-bottom:1px solid #E8EDEE;">'
+        f'<div class="rf-note">{label}</div>'
+        f'<div style="font-size:.9rem;margin-top:.2rem;line-height:1.45;">{display_value}</div>'
+        '</div>'
+    )
+
+
+def issue_detail(issue: pd.Series) -> None:
+    st.markdown(
+        f'<div class="rf-card"><div class="rf-issue-title">{issue["issue_id"]} · {issue["issue_title"]}</div>'
+        f'<div class="rf-note">{issue["business_area"]} · {issue["severity"]} · {issue["status"]}</div>'
+        f'<p style="margin-top:1rem;line-height:1.58;font-size:.91rem;">{issue["issue_description"]}</p></div>',
+        unsafe_allow_html=True,
+    )
+    overview, controls, remediation = st.tabs(["Issue overview", "Risk & controls", "Remediation & closure"])
+    with overview:
+        left, right = st.columns(2, gap="large")
+        with left:
+            st.markdown(
+                _detail_pair("Business area", issue["business_area"])
+                + _detail_pair("Affected process", issue["affected_process"])
+                + _detail_pair("Issue source", issue["issue_source"])
+                + _detail_pair("Date identified", _display_date(issue["date_identified"])),
+                unsafe_allow_html=True,
+            )
+        with right:
+            st.markdown(
+                _detail_pair("Issue owner", issue["issue_owner"])
+                + _detail_pair("Priority", f'{issue["priority_band"]} · {int(issue["priority_score"])} points')
+                + _detail_pair("Days open", f'{int(issue["days_open"])} days')
+                + _detail_pair("Escalation", "Required" if issue["escalation_required"] else "Not currently required"),
+                unsafe_allow_html=True,
+            )
+    with controls:
+        left, right = st.columns(2, gap="large")
+        with left:
+            st.markdown(
+                _detail_pair("Risk category", issue["risk_category"])
+                + _detail_pair("Risk theme", issue["risk_theme"])
+                + _detail_pair("Root cause", issue["root_cause_category"])
+                + _detail_pair("Root-cause analysis", issue["root_cause_detail"]),
+                unsafe_allow_html=True,
+            )
+        with right:
+            st.markdown(
+                _detail_pair("Affected control", issue["affected_control"])
+                + _detail_pair("Control design", issue["control_design_rating"])
+                + _detail_pair("Operating effectiveness", issue["operating_effectiveness_rating"])
+                + _detail_pair("Customer / regulatory impact", f'{issue["customer_impact"]} / {issue["regulatory_impact"]}'),
+                unsafe_allow_html=True,
+            )
+    with remediation:
+        left, right = st.columns(2, gap="large")
+        with left:
+            st.markdown(
+                _detail_pair("Remediation action", issue["remediation_action"])
+                + _detail_pair("Action owner", issue["action_owner"])
+                + _detail_pair("Original target date", _display_date(issue["original_target_date"]))
+                + _detail_pair("Current target date", _display_date(issue["current_target_date"]))
+                + _detail_pair("Target extensions", int(issue["extension_count"])),
+                unsafe_allow_html=True,
+            )
+        with right:
+            st.markdown(
+                _detail_pair("Evidence status", issue["evidence_status"])
+                + _detail_pair("Closure evidence", issue["closure_evidence_summary"])
+                + _detail_pair("Reviewer decision", issue["reviewer_decision"])
+                + _detail_pair("Reviewer rationale", issue["reviewer_rationale"])
+                + _detail_pair("Residual risk", issue["residual_risk"]),
+                unsafe_allow_html=True,
+            )
+
+
+def issue_register_page(data: pd.DataFrame) -> None:
+    header(
+        "Issue Register",
+        "Search, filter and inspect the complete population of risk and control issues.",
+    )
+    search = st.text_input(
+        "Search issues",
+        placeholder="Search by issue ID, title, process or description",
+    )
+    first, second, third = st.columns(3, gap="small")
+    with first:
+        business_areas = st.multiselect("Business area", sorted(data["business_area"].unique()))
+        risk_categories = st.multiselect("Risk category", sorted(data["risk_category"].unique()))
+    with second:
+        severities = st.multiselect("Severity", ["Critical", "High", "Medium", "Low"])
+        root_causes = st.multiselect("Root cause", sorted(data["root_cause_category"].unique()))
+    with third:
+        statuses = st.multiselect("Lifecycle status", sorted(data["status"].unique()))
+        overdue_only = st.checkbox("Overdue issues only")
+        escalation_only = st.checkbox("Escalation required")
+        repeat_only = st.checkbox("Repeat issues only")
+
+    filtered = filter_issues(
+        data,
+        search=search,
+        business_areas=business_areas,
+        severities=severities,
+        statuses=statuses,
+        risk_categories=risk_categories,
+        root_causes=root_causes,
+        overdue_only=overdue_only,
+        escalation_only=escalation_only,
+        repeat_only=repeat_only,
+    ).sort_values(["priority_score", "issue_id"], ascending=[False, True])
+
+    result_left, result_right = st.columns([3, 1])
+    with result_left:
+        st.markdown(f"### {len(filtered)} issues")
+    with result_right:
+        export = filtered.copy()
+        for column in [name for name in export.columns if "date" in name]:
+            export[column] = export[column].dt.strftime("%Y-%m-%d")
+        st.download_button(
+            "Download filtered CSV",
+            data=export.to_csv(index=False).encode("utf-8"),
+            file_name="riskflow_filtered_issues.csv",
+            mime="text/csv",
+            width="stretch",
+            disabled=filtered.empty,
+        )
+
+    if filtered.empty:
+        st.warning("No issues match the selected filters. Adjust one or more criteria to continue.")
+        return
+
+    table = filtered.copy()
+    table["Issue"] = table["issue_id"] + "  ·  " + table["issue_title"]
+    table["Target date"] = table["current_target_date"].dt.strftime("%d %b %Y").fillna("Not yet agreed")
+    table["Overdue"] = table["days_overdue"].apply(lambda value: f"{int(value)} days" if value else "—")
+    table["Escalation"] = table["escalation_required"].map({True: "Required", False: "—"})
+    display = table[["Issue", "business_area", "severity", "status", "issue_owner", "Target date", "Overdue", "priority_score", "Escalation"]]
+    display.columns = ["Issue", "Business area", "Severity", "Status", "Issue owner", "Target date", "Overdue", "Score", "Escalation"]
+    st.dataframe(
+        display,
+        hide_index=True,
+        width="stretch",
+        height=410,
+        column_config={
+            "Issue": st.column_config.TextColumn(width="large"),
+            "Business area": st.column_config.TextColumn(width="medium"),
+            "Issue owner": st.column_config.TextColumn(width="medium"),
+            "Score": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%d"),
+        },
+    )
+
+    st.markdown("## Issue Detail")
+    labels = {
+        row.issue_id: f"{row.issue_id} · {row.issue_title}"
+        for row in filtered.itertuples()
+    }
+    default_id = "ISS-024" if "ISS-024" in labels else next(iter(labels))
+    selected_id = st.selectbox(
+        "Open issue",
+        options=list(labels),
+        index=list(labels).index(default_id),
+        format_func=labels.get,
+        key="register_issue_selector",
+    )
+    issue_detail(filtered.loc[filtered["issue_id"].eq(selected_id)].iloc[0])
+
+
 def placeholder_page(title: str, copy: str) -> None:
     header(title, copy)
     st.info("This module is included in the approved product design and will be implemented in the next build slice.")
@@ -343,7 +515,7 @@ if page == "Executive Overview":
 elif page == "Priority Review":
     priority_page(data)
 elif page == "Issue Register":
-    placeholder_page("Issue Register", "Filter and inspect the complete population of risk and control issues.")
+    issue_register_page(data)
 elif page == "Closure Review":
     placeholder_page("Closure Review", "Assess remediation evidence and record an independent closure decision.")
 else:

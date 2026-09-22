@@ -12,10 +12,11 @@ personal information.
 - Executive risk and controls overview
 - Transparent priority scoring
 - Priority review queue and issue-level score explanation
+- Searchable Issue Register with composable filters, CSV export and drill-down
 - Deterministic synthetic dataset with automated validation
 
-Additional approved modules are under active development: Issue Register,
-Closure Review and Thematic Analysis.
+Additional approved modules are under active development: Closure Review and
+Thematic Analysis.
 
 ## Run locally
 
@@ -30,4 +31,3 @@ streamlit run app.py
 python scripts/validate_synthetic_data.py
 pytest
 ```
-

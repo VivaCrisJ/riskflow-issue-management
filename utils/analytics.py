@@ -179,3 +179,53 @@ def priority_queue(frame: pd.DataFrame, limit: int = 8) -> pd.DataFrame:
         .drop(columns="_band_rank")
     )
 
+
+def filter_issues(
+    frame: pd.DataFrame,
+    *,
+    search: str = "",
+    business_areas: list[str] | None = None,
+    severities: list[str] | None = None,
+    statuses: list[str] | None = None,
+    risk_categories: list[str] | None = None,
+    root_causes: list[str] | None = None,
+    overdue_only: bool = False,
+    escalation_only: bool = False,
+    repeat_only: bool = False,
+) -> pd.DataFrame:
+    """Apply the Issue Register filters without mutating the source frame."""
+    result = frame.copy()
+    query = search.strip().lower()
+    if query:
+        searchable = (
+            result["issue_id"].fillna("")
+            + " "
+            + result["issue_title"].fillna("")
+            + " "
+            + result["issue_description"].fillna("")
+            + " "
+            + result["affected_process"].fillna("")
+        ).str.lower()
+        terms = [term for term in query.split() if term]
+        matches = pd.Series(True, index=result.index)
+        for term in terms:
+            matches &= searchable.str.contains(term, regex=False)
+        result = result.loc[matches]
+
+    filters = {
+        "business_area": business_areas,
+        "severity": severities,
+        "status": statuses,
+        "risk_category": risk_categories,
+        "root_cause_category": root_causes,
+    }
+    for column, values in filters.items():
+        if values:
+            result = result.loc[result[column].isin(values)]
+    if overdue_only:
+        result = result.loc[result["overdue_flag"]]
+    if escalation_only:
+        result = result.loc[result["escalation_required"]]
+    if repeat_only:
+        result = result.loc[result["repeat_issue"]]
+    return result
