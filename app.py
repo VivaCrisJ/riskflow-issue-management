@@ -18,6 +18,7 @@ from utils.analytics import (
     enrich_issues,
     filter_issues,
     load_issues,
+    overview_segment,
     priority_factors,
     priority_queue,
     summary_metrics,
@@ -80,7 +81,7 @@ def apply_theme() -> None:
         [data-testid="stSidebar"] [data-baseweb="radio"] label:hover {
             background: rgba(255,255,255,.07);
         }
-        .block-container { max-width: 1460px; padding-top: 2.1rem; padding-bottom: 3rem; }
+        .block-container { max-width: 1460px; padding-top: 4rem; padding-bottom: 3rem; }
         h1, h2, h3 { color: var(--rf-ink); letter-spacing: -.02em; }
         h1 { font-size: 2rem !important; font-weight: 650 !important; }
         h2 { font-size: 1.28rem !important; font-weight: 620 !important; }
@@ -93,6 +94,10 @@ def apply_theme() -> None:
         .rf-metric { background: #FFFFFF; border: 1px solid var(--rf-line); border-radius: .7rem; padding: 1rem 1.05rem; min-height: 106px; box-shadow: 0 1px 2px rgba(38,57,70,.025); }
         .rf-metric-label { color: var(--rf-muted); font-size: .78rem; font-weight: 600; line-height: 1.25; min-height: 2rem; }
         .rf-metric-value { color: var(--rf-ink); font-size: 1.85rem; font-weight: 680; margin-top: .22rem; }
+        .rf-metric-link { display:block; color:inherit !important; text-decoration:none !important; border-radius:.7rem; }
+        .rf-metric-link .rf-metric { transition: transform .14s ease, border-color .14s ease, box-shadow .14s ease; }
+        .rf-metric-link:hover .rf-metric { transform:translateY(-2px); border-color:#9BAFAE; box-shadow:0 6px 18px rgba(38,57,70,.08); }
+        .rf-metric-action { color:var(--rf-teal); font-size:.7rem; font-weight:700; margin-top:.12rem; }
         .rf-section-copy { color: var(--rf-muted); font-size: .88rem; margin-top: -.55rem; margin-bottom: .9rem; }
         .rf-card { background: #FFFFFF; border: 1px solid var(--rf-line); border-radius: .7rem; padding: 1rem 1.05rem; }
         .rf-factor { display:flex; justify-content:space-between; gap:1rem; padding:.48rem 0; border-bottom:1px solid #E8EDEE; font-size:.86rem; }
@@ -140,6 +145,93 @@ def metric_cards(metrics: dict[str, int]) -> None:
             )
 
 
+OVERVIEW_METRIC_SEGMENTS = {
+    "Open issues": "open",
+    "Open high & critical": "high_critical",
+    "Overdue": "overdue",
+    "Awaiting closure": "awaiting_closure",
+    "Escalation required": "escalation",
+}
+
+
+def overview_metric_cards(metrics: dict[str, int]) -> None:
+    columns = st.columns(len(metrics), gap="small")
+    for column, (label, value) in zip(columns, metrics.items()):
+        segment = OVERVIEW_METRIC_SEGMENTS[label]
+        with column:
+            st.markdown(
+                f'<a class="rf-metric-link" href="?overview_filter={segment}#overview-drilldown" target="_self" '
+                f'aria-label="View issues for {label}">'
+                f'<div class="rf-metric"><div class="rf-metric-label">{label}</div>'
+                f'<div class="rf-metric-value">{value}</div>'
+                '<div class="rf-metric-action">View issues →</div></div></a>',
+                unsafe_allow_html=True,
+            )
+
+
+def _selection_points(state: object) -> list[dict[str, object]]:
+    if state is None:
+        return []
+    selection = state.get("selection", {}) if hasattr(state, "get") else {}
+    points = selection.get("points", []) if hasattr(selection, "get") else []
+    return list(points)
+
+
+def _set_overview_chart_focus(chart_key: str, dimension: str, point_field: str) -> None:
+    points = _selection_points(st.session_state.get(chart_key))
+    if not points:
+        return
+    value = points[-1].get(point_field)
+    if value is None:
+        return
+    st.session_state["overview_chart_focus"] = {
+        "dimension": dimension,
+        "value": str(value),
+    }
+    st.query_params.pop("overview_filter", None)
+
+
+def _overview_issue_drilldown(
+    issues: pd.DataFrame,
+    title: str,
+    description: str,
+    key_suffix: str,
+) -> None:
+    st.markdown('<div id="overview-drilldown"></div>', unsafe_allow_html=True)
+    st.markdown(f"## {title}")
+    st.markdown(f'<div class="rf-section-copy">{description}</div>', unsafe_allow_html=True)
+    if issues.empty:
+        st.info("No issues are currently represented by this selection.")
+        return
+
+    ordered = issues.sort_values(["priority_score", "issue_id"], ascending=[False, True]).copy()
+    ordered["Issue"] = ordered["issue_id"] + "  ·  " + ordered["issue_title"]
+    ordered["Target date"] = ordered["current_target_date"].dt.strftime("%d %b %Y").fillna("Not yet agreed")
+    ordered["Overdue"] = ordered["days_overdue"].apply(lambda value: f"{int(value)} days" if value else "—")
+    display = ordered[["Issue", "business_area", "severity", "status", "Target date", "Overdue", "priority_score"]]
+    display.columns = ["Issue", "Business area", "Severity", "Status", "Target date", "Overdue", "Score"]
+    table_state = st.dataframe(
+        display,
+        hide_index=True,
+        width="stretch",
+        height=min(430, 38 + 36 * len(display)),
+        key=f"overview_drilldown_{key_suffix}",
+        on_select="rerun",
+        selection_mode="single-row",
+        column_config={
+            "Issue": st.column_config.TextColumn(width="large"),
+            "Business area": st.column_config.TextColumn(width="medium"),
+            "Score": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%d"),
+        },
+    )
+    st.caption("Select a row to open its complete issue record.")
+    selected_rows = table_state.selection.rows
+    if selected_rows:
+        selected_issue = ordered.iloc[selected_rows[0]]
+        with st.expander(f'{selected_issue["issue_id"]} · Issue detail', expanded=True):
+            issue_detail(selected_issue)
+
+
 def chart_layout(fig: go.Figure, height: int = 310) -> go.Figure:
     fig.update_layout(
         height=height,
@@ -159,7 +251,7 @@ def overview_page(data: pd.DataFrame) -> None:
         "Executive Overview",
         "A focused view of current exposure, ageing and the issues requiring attention now.",
     )
-    metric_cards(summary_metrics(data))
+    overview_metric_cards(summary_metrics(data))
 
     st.markdown("## Priority Review Queue")
     st.markdown(
@@ -174,16 +266,31 @@ def overview_page(data: pd.DataFrame) -> None:
     )
     display = queue[["Issue", "business_area", "severity", "status", "Target date", "Days overdue", "priority_score", "priority_band"]]
     display.columns = ["Issue", "Business area", "Severity", "Status", "Target date", "Days overdue", "Score", "Priority"]
-    st.dataframe(
+    queue_state = st.dataframe(
         display,
         hide_index=True,
         width="stretch",
         height=276,
+        key="overview_priority_queue",
+        on_select="rerun",
+        selection_mode="single-row",
         column_config={
             "Issue": st.column_config.TextColumn(width="large"),
             "Business area": st.column_config.TextColumn(width="medium"),
             "Score": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%d"),
         },
+    )
+    st.caption("Select any row to open the complete issue record.")
+    selected_queue_rows = queue_state.selection.rows
+    if selected_queue_rows:
+        selected_issue = queue.iloc[selected_queue_rows[0]]
+        with st.expander(f'{selected_issue["issue_id"]} · Issue detail', expanded=True):
+            issue_detail(selected_issue)
+
+    st.markdown("## Portfolio profile")
+    st.markdown(
+        '<div class="rf-section-copy">Select a bar or donut segment to see the underlying issues.</div>',
+        unsafe_allow_html=True,
     )
 
     left, right = st.columns([1.05, 0.95], gap="medium")
@@ -201,7 +308,14 @@ def overview_page(data: pd.DataFrame) -> None:
         fig.update_traces(marker_line_width=0, hovertemplate="%{y}: %{x}<extra></extra>")
         fig.update_xaxes(showgrid=False, title=None, dtick=2)
         fig.update_yaxes(title=None)
-        st.plotly_chart(chart_layout(fig, 335), width="stretch", config={"displayModeBar": False})
+        st.plotly_chart(
+            chart_layout(fig, 335),
+            width="stretch",
+            config={"displayModeBar": False},
+            key="overview_status_chart",
+            on_select=lambda: _set_overview_chart_focus("overview_status_chart", "status", "y"),
+            selection_mode="points",
+        )
 
     with right:
         severity_order = ["Critical", "High", "Medium", "Low"]
@@ -218,7 +332,14 @@ def overview_page(data: pd.DataFrame) -> None:
             )
         )
         fig.update_layout(title="Issue severity profile", showlegend=False)
-        st.plotly_chart(chart_layout(fig, 335), width="stretch", config={"displayModeBar": False})
+        st.plotly_chart(
+            chart_layout(fig, 335),
+            width="stretch",
+            config={"displayModeBar": False},
+            key="overview_severity_chart",
+            on_select=lambda: _set_overview_chart_focus("overview_severity_chart", "severity", "label"),
+            selection_mode="points",
+        )
 
     left, right = st.columns(2, gap="medium")
     with left:
@@ -234,7 +355,14 @@ def overview_page(data: pd.DataFrame) -> None:
         )
         fig.update_xaxes(showgrid=False, title=None)
         fig.update_yaxes(title=None)
-        st.plotly_chart(chart_layout(fig, 330), width="stretch", config={"displayModeBar": False})
+        st.plotly_chart(
+            chart_layout(fig, 330),
+            width="stretch",
+            config={"displayModeBar": False},
+            key="overview_area_chart",
+            on_select=lambda: _set_overview_chart_focus("overview_area_chart", "business_area", "y"),
+            selection_mode="points",
+        )
 
     with right:
         root_counts = data["root_cause_category"].value_counts().head(6).sort_values().reset_index()
@@ -249,7 +377,54 @@ def overview_page(data: pd.DataFrame) -> None:
         )
         fig.update_xaxes(showgrid=False, title=None)
         fig.update_yaxes(title=None)
-        st.plotly_chart(chart_layout(fig, 330), width="stretch", config={"displayModeBar": False})
+        st.plotly_chart(
+            chart_layout(fig, 330),
+            width="stretch",
+            config={"displayModeBar": False},
+            key="overview_root_chart",
+            on_select=lambda: _set_overview_chart_focus("overview_root_chart", "root_cause_category", "y"),
+            selection_mode="points",
+        )
+
+    metric_segment = st.query_params.get("overview_filter")
+    chart_focus = st.session_state.get("overview_chart_focus")
+    focused_issues: pd.DataFrame | None = None
+    focus_title = ""
+    focus_description = ""
+    focus_key = ""
+
+    if metric_segment in OVERVIEW_METRIC_SEGMENTS.values():
+        label = next(label for label, segment in OVERVIEW_METRIC_SEGMENTS.items() if segment == metric_segment)
+        focused_issues = overview_segment(data, metric_segment)
+        focus_title = f"{label} · {len(focused_issues)} issues"
+        focus_description = "This is the complete issue population represented by the selected executive KPI."
+        focus_key = f"metric_{metric_segment}"
+    elif chart_focus:
+        dimension = chart_focus["dimension"]
+        value = chart_focus["value"]
+        focused_issues = data.loc[data[dimension].astype(str).eq(value)].copy()
+        dimension_label = {
+            "status": "Lifecycle status",
+            "severity": "Severity",
+            "business_area": "Business area",
+            "root_cause_category": "Root cause",
+        }[dimension]
+        focus_title = f"{value} · {len(focused_issues)} issues"
+        focus_description = f"Underlying issues for the selected {dimension_label.lower()} category."
+        safe_value = "".join(character if character.isalnum() else "_" for character in value)
+        focus_key = f"chart_{dimension}_{safe_value}"
+
+    if focused_issues is not None:
+        _overview_issue_drilldown(
+            focused_issues,
+            focus_title,
+            focus_description,
+            focus_key,
+        )
+        if st.button("Clear focused view", key="clear_overview_focus"):
+            st.session_state.pop("overview_chart_focus", None)
+            st.query_params.pop("overview_filter", None)
+            st.rerun()
 
 
 def priority_page(data: pd.DataFrame) -> None:

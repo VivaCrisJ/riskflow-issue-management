@@ -215,6 +215,21 @@ def summary_metrics(frame: pd.DataFrame) -> dict[str, int]:
     }
 
 
+def overview_segment(frame: pd.DataFrame, segment: str) -> pd.DataFrame:
+    """Return the issue population represented by an executive KPI."""
+    open_mask = frame["status"].ne("Closed")
+    masks = {
+        "open": open_mask,
+        "high_critical": open_mask & frame["severity"].isin(["Critical", "High"]),
+        "overdue": open_mask & frame["overdue_flag"],
+        "awaiting_closure": frame["status"].eq("Awaiting Closure Review"),
+        "escalation": open_mask & frame["escalation_required"],
+    }
+    if segment not in masks:
+        raise ValueError(f"Unknown overview segment: {segment}")
+    return frame.loc[masks[segment]].copy()
+
+
 def priority_queue(frame: pd.DataFrame, limit: int = 8) -> pd.DataFrame:
     rank = {"Immediate": 0, "High": 1, "Standard": 2, "Monitor": 3}
     open_issues = frame.loc[frame["status"].ne("Closed")].copy()

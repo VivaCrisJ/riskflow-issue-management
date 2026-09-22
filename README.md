@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/VivaCrisJ/riskflow-issue-management/actions/workflows/ci.yml/badge.svg)](https://github.com/VivaCrisJ/riskflow-issue-management/actions/workflows/ci.yml)
 
+**[Open the live RiskFlow demonstration →](https://riskflow-issue-management-ml2ncnjmk56yhfsr5jvtdg.streamlit.app/)**
+
 RiskFlow is an interactive portfolio prototype exploring how structured data,
 workflow automation and human-reviewed thematic analysis can support the
 issue-management lifecycle in financial services.
@@ -11,7 +13,7 @@ personal information.
 
 ## Current build
 
-- Executive risk and controls overview
+- Interactive executive overview with KPI, chart and issue-level drill-downs
 - Transparent priority scoring
 - Priority review queue and issue-level score explanation
 - Searchable Issue Register with composable filters, CSV export and drill-down

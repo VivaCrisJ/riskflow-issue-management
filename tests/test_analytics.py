@@ -8,6 +8,7 @@ from utils.analytics import (
     enrich_issues,
     filter_issues,
     load_issues,
+    overview_segment,
     priority_queue,
     summary_metrics,
     thematic_summary,
@@ -44,6 +45,17 @@ def test_closed_issues_are_not_overdue_and_queue_excludes_them():
     queue = priority_queue(data, limit=len(data))
     assert not queue["status"].eq("Closed").any()
     assert queue.iloc[0]["priority_band"] == "Immediate"
+
+
+def test_executive_kpi_segments_reconcile_to_summary_metrics():
+    data = enrich_issues(load_issues(DATA_PATH))
+    metrics = summary_metrics(data)
+
+    assert len(overview_segment(data, "open")) == metrics["Open issues"]
+    assert len(overview_segment(data, "high_critical")) == metrics["Open high & critical"]
+    assert len(overview_segment(data, "overdue")) == metrics["Overdue"]
+    assert len(overview_segment(data, "awaiting_closure")) == metrics["Awaiting closure"]
+    assert len(overview_segment(data, "escalation")) == metrics["Escalation required"]
 
 
 def test_issue_register_filters_are_composable():
